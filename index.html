@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Image Upload App</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <h1>📤 Image Upload App</h1>
+
+    <!-- Upload Box -->
+    <div id="dropZone" class="drop-zone">
+      <p>Drag & Drop your image here <br> or <br> Click to Browse</p>
+      <input type="file" id="fileInput" accept="image/*" hidden>
+    </div>
+
+    <!-- Preview -->
+    <div id="preview" class="preview hidden">
+      <h3>Preview:</h3>
+      <img id="previewImg" alt="Preview">
+      <p id="fileInfo"></p>
+    </div>
+
+    <!-- Upload Button -->
+    <button id="uploadBtn" disabled>Upload</button>
+
+    <!-- Progress -->
+    <div class="progress-container hidden">
+      <div id="progressBar" class="progress-bar"></div>
+    </div>
+
+    <!-- Status -->
+    <p id="status"></p>
+
+    <!-- Gallery Section -->
+    <div id="gallery" class="gallery hidden">
+      <h3>Uploaded Images</h3>
+      <div id="galleryGrid" class="gallery-grid"></div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
