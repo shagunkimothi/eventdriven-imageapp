@@ -1,0 +1,3 @@
+Hello, world!
+This is a simple text file created for testing.
+Have a great day!

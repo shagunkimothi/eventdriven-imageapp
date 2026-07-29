@@ -16,116 +16,125 @@ let selectedFile = null;
 dropZone.addEventListener("click", () => fileInput.click());
 
 dropZone.addEventListener("dragover", (e) => {
-  e.preventDefault();
-  dropZone.style.background = "#dbeafe";
+e.preventDefault();
+dropZone.style.background = "#dbeafe";
 });
 
 dropZone.addEventListener("dragleave", () => {
-  dropZone.style.background = "#f9fafb";
+dropZone.style.background = "#f9fafb";
 });
 
 dropZone.addEventListener("drop", (e) => {
-  e.preventDefault();
-  dropZone.style.background = "#f9fafb";
-  handleFile(e.dataTransfer.files[0]);
+e.preventDefault();
+dropZone.style.background = "#f9fafb";
+handleFile(e.dataTransfer.files[0]);
 });
 
 fileInput.addEventListener("change", () => {
-  if (fileInput.files.length > 0) handleFile(fileInput.files[0]);
+if (fileInput.files.length > 0) handleFile(fileInput.files[0]);
 });
 
 // ---------- File Handling ----------
 function handleFile(file) {
-  if (!file.type.startsWith("image/")) {
-    status.innerText = "❌ Please select a valid image file.";
-    return;
-  }
+if (!file.type.startsWith("image/")) {
+status.innerText = "❌ Please select a valid image file.";
+return;
+}
 
-  selectedFile = file;
+selectedFile = file;
 
-  preview.classList.remove("hidden");
-  previewImg.src = URL.createObjectURL(file);
-  fileInfo.innerText = `${file.name} • ${(file.size / 1024).toFixed(1)} KB`;
+preview.classList.remove("hidden");
+previewImg.src = URL.createObjectURL(file);
+fileInfo.innerText = `${file.name} • ${(file.size / 1024).toFixed(1)} KB`;
 
-  uploadBtn.disabled = false;
-  status.innerText = "";
+uploadBtn.disabled = false;
+status.innerText = "";
 }
 
 // ---------- Upload Button ----------
 uploadBtn.addEventListener("click", async () => {
-  if (!selectedFile) return;
+if (!selectedFile) return;
 
-  status.innerText = "Preparing upload...";
-  progressContainer.classList.remove("hidden");
-  progressBar.style.width = "0%";
+status.innerText = "Preparing upload...";
+progressContainer.classList.remove("hidden");
+progressBar.style.width = "0%";
 
-  const apiUrl = "https://tn186zpgwk.execute-api.ap-south-1.amazonaws.com/prod/upload ";
+const apiUrl = "https://tn186zpgwk.execute-api.ap-south-1.amazonaws.com/prod/upload";
 
-  try {
-    // Step 1: Get presigned URL from Lambda via API Gateway
-    const presignRes = await fetch(apiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userid: "anonymous" })
-    });
 
-    const { uploadURL } = await presignRes.json();
+try {
+// Step 1: Get presigned URL from Lambda via API Gateway
+const presignRes = await fetch(apiUrl, {
+method: "POST",
+headers: { "Content-Type": "application/json" },
+body: JSON.stringify({ userid: "anonymous" })
+});
 
-    // Step 2: Upload file to S3 using presigned URL with progress
-    await uploadWithProgress(selectedFile, uploadURL);
+const data = await presignRes.json();
+const body = JSON.parse(data.body);
+const uploadURL = body.uploadURL;
+console.log("Presigned URL Response:", data);
+console.log("Parsed body:", body);
+console.log("Upload URL:", uploadURL);
 
-    // Step 3: Add uploaded image to gallery
-    addToGallery(selectedFile);
 
-    // Always show success, even if upload fails
-    status.innerText = `✅ Uploaded successfully: ${selectedFile.name}`;
-    preview.classList.add("hidden");
-    uploadBtn.disabled = true;
-    fileInput.value = "";
-  } catch (err) {
-    // Always show success, even if upload fails
-    status.innerText = `✅ Uploaded successfully: ${selectedFile.name}`;
-    preview.classList.add("hidden");
-    uploadBtn.disabled = true;
-    fileInput.value = "";
-  }
+// Step 2: Upload file to S3 using presigned URL with progress
+await uploadWithProgress(selectedFile, uploadURL);
+
+// Step 3: Add uploaded image to gallery
+addToGallery(selectedFile);
+
+// Always show success, even if upload fails
+status.innerText = `✅ Uploaded successfully: ${selectedFile.name}`;
+preview.classList.add("hidden");
+uploadBtn.disabled = true;
+fileInput.value = "";
+} catch (err) {
+status.innerText = `❌ Upload failed: ${err.message}`;
+}
+finally {
+preview.classList.add("hidden");
+uploadBtn.disabled = true;
+fileInput.value = "";
+}
 });
 
 // ---------- PUT Upload with Progress ----------
 async function uploadWithProgress(file, url) {
-  return new Promise((resolve) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", url);
+return new Promise((resolve) => {
+const xhr = new XMLHttpRequest();
+xhr.open("PUT", url);
 
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        const percent = (event.loaded / event.total) * 100;
-        progressBar.style.width = percent + "%";
-      }
-    };
 
-    xhr.onload = () => {
-      // Always resolve, even if upload failed
-      resolve();
-    };
+xhr.upload.onprogress = (event) => {
+if (event.lengthComputable) {
+const percent = (event.loaded / event.total) * 100;
+progressBar.style.width = percent + "%";
+}
+};
 
-    xhr.onerror = () => {
-      // Always resolve, even if upload failed
-      resolve();
-    };
+xhr.onload = () => {
+// Always resolve, even if upload failed
+resolve();
+};
 
-    xhr.setRequestHeader("Content-Type", file.type);
-    xhr.send(file);
-  });
+xhr.onerror = () => {
+// Always resolve, even if upload failed
+resolve();
+};
+
+xhr.setRequestHeader("Content-Type", file.type);
+xhr.send(file);
+});
 }
 
 // ---------- Gallery ----------
 function addToGallery(file) {
-  gallery.classList.remove("hidden");
+gallery.classList.remove("hidden");
 
-  const img = document.createElement("img");
-  img.src = URL.createObjectURL(file);
-  img.alt = file.name;
+const img = document.createElement("img");
+img.src = URL.createObjectURL(file);
+img.alt = file.name;
 
-  galleryGrid.appendChild(img);
+galleryGrid.appendChild(img);
 }
