@@ -1,260 +1,371 @@
-# ☁️ Serverless Event-Driven Image Processing App
+# Serverless Image Optimization & Analysis
 
-A fully serverless image upload and processing pipeline built on AWS. Users upload images through a browser UI; the backend stores them in S3, reacts to the upload event, processes the file through Lambda, and logs metadata in DynamoDB — with zero servers to manage.
+Serverless Image Optimization & Analysis is an AWS serverless platform for authenticated image uploads, configurable optimization, and image analysis. Users select an output format, quality, and maximum dimension, then receive an optimized image together with Rekognition labels and an Amazon Nova 2 Lite description through Amazon Bedrock. The workflow is event-driven and uses AWS managed services without a continuously running server.
+## Key Features
 
-<p>
-  <img src="https://img.shields.io/badge/AWS-Lambda%20%7C%20S3%20%7C%20DynamoDB-FF9900?logo=amazonaws&logoColor=white" alt="AWS">
-  <img src="https://img.shields.io/badge/API-Gateway%20REST-FF4F8B?logo=amazonapi&logoColor=white" alt="API Gateway">
-  <img src="https://img.shields.io/badge/Backend-Python%203-3776AB?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/Frontend-HTML%20%7C%20CSS%20%7C%20JavaScript-F7DF1E?logo=javascript&logoColor=black" alt="Frontend">
-  <img src="https://img.shields.io/badge/Architecture-Event--Driven%20%2F%20Serverless-4CAF50" alt="Architecture">
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/app-ui.png" alt="App UI — drag-and-drop upload with live gallery" width="700">
-</p>
-
----
-
-## Table of Contents
-
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Screenshots](#screenshots)
-- [AWS Setup & Deployment](#aws-setup--deployment)
-- [Project Structure](#project-structure)
-- [Current Limitations](#current-limitations)
-- [Roadmap](#roadmap)
-- [Skills Demonstrated](#skills-demonstrated)
-- [Author](#author)
-
----
-
-## Overview
-
-This project simulates a real-world, production-style media pipeline using only managed AWS services. It was built to practice designing event-driven, serverless architecture end-to-end — from a browser upload flow, through IAM-scoped compute, to durable storage and metadata tracking — without provisioning or managing a single server.
+- Amazon Cognito sign-up, email verification, sign-in, session persistence, and logout
+- Cognito JWT-protected API Gateway HTTP API
+- Presigned S3 uploads, keeping image binaries out of API Gateway
+- User-controlled JPEG, PNG, or WebP output format
+- Quality control and maximum-dimension resizing
+- Separate source and destination S3 buckets
+- S3 event notification to SQS
+- SQS dead-letter queue (DLQ) and retry redrive policy
+- Python AWS Lambda image processing
+- Pillow resizing, compression, and format conversion
+- Amazon Rekognition label detection with confidence scores
+- Amazon Bedrock Converse with Amazon Nova 2 Lite for image descriptions
+- DynamoDB persistence for processing metadata and analysis results
+- Dashboard, upload, gallery/history, and image details views
+- Temporary image URLs for viewing and downloading processed images
+- Image deletion from source S3, destination S3, and DynamoDB
+- Terraform infrastructure as code
+- Lambda and application logging through Amazon CloudWatch
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    A[Browser UI<br/>HTML / CSS / JS] -->|POST /upload| B[API Gateway<br/>REST API]
-    B --> C[Lambda: Presign<br/>generates upload URL]
-    C -->|writes metadata| D[(DynamoDB<br/>ImagesMetadata)]
-    C -->|presigned URL| A
-    A -->|PUT image| E[(S3 Raw Bucket)]
-    E -->|S3 Event Notification| F[SNS / SQS]
-    F --> G[Lambda: Processor]
-    G -->|copies + processes| H[(S3 Processed Bucket)]
-    G -->|writes metadata| D
+    U[User] --> F[React Frontend]
+    F --> C[Amazon Cognito]
+    C --> A[API Gateway HTTP API<br/>JWT Authorizer]
+    A --> P[Presign Lambda]
+    P -->|Presigned PUT URL| F
+    F -->|Direct upload| S[(S3 Source Bucket)]
+    S -->|ObjectCreated event| Q[SQS Queue]
+    Q -->|After retry limit| DLQ[(SQS Dead Letter Queue)]
+    Q --> R[Processor Lambda]
+
+    R -->|Pillow optimization| D[(S3 Destination Bucket)]
+    R --> K[Amazon Rekognition]
+    K --> L[Labels + confidence]
+    R --> B[Amazon Bedrock]
+    B --> N[Amazon Nova 2 Lite]
+    N --> T[AI description]
+    R --> M[(DynamoDB ImageMetadata)]
+
+    A --> I[Images API Lambda]
+    I -->|Read metadata and create temporary URLs| M
+    I -->|View/delete objects| S
+    I -->|View/delete objects| D
+    I --> A
+    A --> G[React Gallery / Details]
 ```
 
-**Flow**
-1. User selects/drags an image into the web UI.
-2. The frontend calls **API Gateway**, which invokes the **Presign Lambda**.
-3. The Lambda generates a presigned S3 URL and writes an initial metadata record to **DynamoDB**.
-4. The browser uploads the file directly to the **S3 raw bucket** using the presigned URL (no file data passes through Lambda).
-5. The upload triggers an **S3 event notification**, published through **SNS/SQS**.
-6. The **Processor Lambda** consumes the event, copies the image to the **S3 processed bucket**, and updates its metadata record.
-7. The gallery renders processed images fetched via DynamoDB metadata.
+The browser authenticates with Cognito, obtains a JWT, and uses the protected API only for presigning, metadata retrieval, and deletion. Image bytes are uploaded directly to S3. S3 places an event in SQS, and the Processor Lambda asynchronously optimizes and analyzes the image before storing the result in DynamoDB.
 
-## Features
+## How It Works
 
-- ✅ Drag-and-drop + click-to-browse upload UI with live preview
-- ✅ Direct-to-S3 uploads via presigned URLs (no binary payloads through Lambda/API Gateway)
-- ✅ Upload progress bar and status feedback
-- ✅ Event-driven processing decoupled from the upload path via SNS/SQS
-- ✅ Per-image metadata (ID, timestamp, owner, URL) tracked in DynamoDB with GSIs
-- ✅ In-browser gallery of uploaded images
-- ✅ IAM least-privilege roles scoped per Lambda function
+1. A user signs up or signs in with Amazon Cognito.
+2. The React frontend obtains an authenticated session and JWT.
+3. The frontend requests a presigned upload URL from `POST /presign`.
+4. Presign Lambda validates the requested output format, quality, and maximum dimension, then signs the S3 upload request with those settings as object metadata.
+5. The browser uploads the original image directly to the S3 source bucket.
+6. S3 emits an object-created event to the SQS processing queue.
+7. Processor Lambda consumes the SQS message.
+8. The processor reads the uploaded image and its optimization metadata from S3.
+9. Pillow resizes and encodes the image using the selected format, quality, and maximum dimension.
+10. The optimized image is written to the destination S3 bucket.
+11. Amazon Rekognition detects labels and returns confidence scores.
+12. Amazon Bedrock sends the optimized image bytes to Amazon Nova 2 Lite, which generates a concise factual description.
+13. The processor stores optimization and analysis metadata in DynamoDB with `ProcessingStatus` set to `COMPLETED`.
+14. The frontend retrieves records through authenticated `GET /images`.
+15. Gallery and Details pages display image comparison, metrics, Rekognition results, and the AI description.
+16. Users can download the optimized image or delete the source image, processed image, and metadata through `DELETE /images/{id}`.
 
-## Tech Stack
+## AWS Services Used
 
-| Layer | Technology |
+| Service | Purpose |
 |---|---|
-| Frontend | HTML5, CSS3, Vanilla JavaScript |
-| Compute | AWS Lambda (Python) |
-| API | Amazon API Gateway (REST) |
-| Storage | Amazon S3 (raw + processed buckets) |
-| Database | Amazon DynamoDB |
-| Messaging | Amazon SNS / SQS |
-| Security | AWS IAM (least-privilege roles & policies) |
-| Testing | Postman |
+| Amazon Cognito | User registration, email verification, sign-in, and JWT sessions |
+| Amazon API Gateway HTTP API | Authenticated `/presign` and `/images` API routes |
+| AWS Lambda | Presign, asynchronous processing, and images metadata API |
+| Amazon S3 | Source uploads, optimized output, and temporary object access URLs |
+| Amazon SQS | Decouples S3 uploads from image processing |
+| Amazon SQS DLQ | Receives messages that exceed the queue retry limit |
+| Amazon DynamoDB | Stores image metadata, optimization metrics, labels, and AI captions |
+| Amazon Rekognition | Detects image labels and confidence scores |
+| Amazon Bedrock | Provides the Converse API for Amazon Nova 2 Lite |
+| Amazon CloudWatch | Receives Lambda execution logs |
+| AWS IAM | Lambda execution permissions and service access policies |
+| Terraform | Provisions and manages the AWS infrastructure |
+
+## Image Optimization
+
+The upload page lets the user choose:
+
+- Output format: JPEG, PNG, or WebP
+- Quality value
+- Maximum image dimension
+
+The Processor Lambda reads these settings from S3 object metadata and uses Pillow to perform the server-side transformation. The implementation preserves the image aspect ratio and limits the maximum dimension; it does not claim that every input will become smaller.
+
+For each completed image, the application records:
+
+- Original size
+- Optimized size
+- Bytes saved
+- Percentage reduction
+- Output format
+- Quality
+- Maximum dimension
+
+JPEG and JPG are normalized internally as `jpeg`. The resulting destination object uses the matching extension and MIME type.
+
+## AI Image Analysis
+
+### Amazon Rekognition
+
+Rekognition detects visual labels in the optimized image and returns each label with a confidence score. WebP input is converted in memory when necessary for Rekognition compatibility; no temporary Rekognition-only image is uploaded.
+
+### Amazon Bedrock and Amazon Nova 2 Lite
+
+The Processor Lambda uses Amazon Bedrock Converse with Amazon Nova 2 Lite:
+
+```text
+global.amazon.nova-2-lite-v1:0
+```
+
+Nova receives the actual optimized image bytes and a prompt requesting one concise, factual description. The generated text is stored in DynamoDB as `AiCaption` during processing. If the Bedrock call fails, the exception is logged and the optimization, Rekognition, and metadata pipeline remains available without inventing a caption.
+
+## Event-Driven Processing
+
+The processing path is:
+
+```text
+S3 Source Bucket → SQS Queue → Processor Lambda
+```
+
+SQS decouples the user-facing upload request from asynchronous image processing. The queue provides retry behavior through its redrive policy, and messages that exceed the configured receive limit are sent to the DLQ for investigation rather than being retried indefinitely.
+
+## DynamoDB Metadata
+
+The `ImageMetadata` table uses `ImageId` as its partition key. Processor records include:
+
+| Field | Description |
+|---|---|
+| `ImageId` | Identifier derived from the uploaded object key |
+| `OriginalFileName` | Source object key |
+| `ProcessedFileName` | Destination optimized object key |
+| `SourceBucket` | Source S3 bucket |
+| `DestinationBucket` | Destination S3 bucket |
+| `OriginalSize` | Original image size in bytes |
+| `OptimizedSize` | Optimized image size in bytes |
+| `SizeReductionPercent` | Calculated percentage reduction |
+| `OutputFormat` | Actual output format |
+| `Quality` | Requested optimization quality |
+| `MaxDimension` | Requested maximum dimension |
+| `RekognitionLabels` | Label names and confidence values |
+| `AiCaption` | Amazon Nova 2 Lite description |
+| `ProcessingStatus` | Current processing state, including `COMPLETED` |
+| `UploadTimestamp` | Processing record timestamp |
+
+The Images API scans the table for the authenticated application flow, adds temporary S3 URLs for available source and processed objects, and supports deletion of the related S3 objects and DynamoDB item.
+
+## Frontend
+
+The React/Vite frontend contains:
+
+- **Login**: Cognito sign-in, account creation, and email verification
+- **Dashboard**: Processing totals, optimization metrics, and recent image records
+- **Upload**: Image selection, output settings, progress, and separate upload/processing states
+- **Gallery**: Search, status filtering, optimization metrics, labels, AI descriptions, downloads, and deletion
+- **Details**: Original/optimized comparison, sizes, saved bytes, reduction percentage, output settings, status, labels, confidence scores, AI description, and upload timestamp
+
+The frontend communicates with API Gateway using an `Authorization` header containing the Cognito JWT. It does not contain AWS access keys and does not call Rekognition, Bedrock, DynamoDB, or SQS directly.
+
+## API Routes
+
+The deployed HTTP API exposes these authenticated routes:
+
+| Method | Route | Purpose |
+|---|---|---|
+| `POST` | `/presign` | Generate a presigned S3 upload URL |
+| `GET` | `/images` | Retrieve image metadata and temporary image URLs |
+| `DELETE` | `/images/{id}` | Delete source object, processed object, and metadata |
+
+The frontend sends upload settings as query parameters to `/presign`:
+
+```text
+/presign?file_name=<name>&output_format=<jpeg|png|webp>&quality=<1-100>&max_dimension=<positive integer>
+```
+
+## Infrastructure as Code
+
+Terraform configuration is located in [`backend/terraform/`](backend/terraform/). The configuration manages the S3 buckets, S3 notification, SQS queue and DLQ, DynamoDB table, Cognito pool and client, IAM permissions, Lambda functions, API Gateway HTTP API, JWT authorizer, routes, and Lambda event source mapping used by the application.
+
+The configured AWS region is `ap-south-1`.
+
+### Terraform Commands
+
+Run Terraform from the infrastructure directory:
+
+```powershell
+cd backend/terraform
+terraform init
+terraform plan
+terraform apply
+```
+
+The AWS provider configuration uses the standard AWS credential chain and the configured `eventdrivenimageapp` profile. Provide credentials through your local AWS configuration or environment; never add credentials to the repository.
+
+To remove infrastructure in a personal test account, use the normal Terraform workflow only after reviewing the plan:
+
+```powershell
+cd backend/terraform
+terraform destroy
+```
+
+## Local Development
+
+### Frontend
+
+The frontend requires Node.js and npm:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+The Vite development server runs on the configured local port, normally `http://localhost:5173`.
+
+Create a local environment file from the provided example and set the deployed API and Cognito values for your environment:
+
+```text
+VITE_API_BASE_URL=<API Gateway base URL>
+VITE_COGNITO_USER_POOL_ID=<Cognito user pool ID>
+VITE_COGNITO_CLIENT_ID=<Cognito app client ID>
+VITE_AWS_REGION=ap-south-1
+```
+
+The frontend uses `amazon-cognito-identity-js` for browser authentication and stores no AWS access keys.
+
+### Backend Lambda Code
+
+The Lambda source is organized under [`backend/lambdas/`](backend/lambdas/):
+
+- `presign/` contains the presigned S3 upload URL handler.
+- `processor/` contains the SQS-triggered processor, Pillow optimizer, and Rekognition/Bedrock analyzer.
+- `images_api/` contains the metadata retrieval and deletion handler.
+
+The Processor Lambda package includes Pillow and is archived by Terraform from its source directory. The presign and Images API dependency files are kept with their respective Lambda folders.
+
+## Verified End-to-End Flow
+
+The implemented flow has been exercised through the application UI and AWS services:
+
+```text
+React UI
+→ Amazon Cognito
+→ API Gateway HTTP API
+→ Presign Lambda
+→ S3 source upload
+→ SQS
+→ Processor Lambda
+→ Pillow optimization
+→ S3 optimized output
+→ Rekognition labels/confidence
+→ Bedrock / Amazon Nova 2 Lite
+→ DynamoDB metadata
+→ Gallery and Details UI
+```
+
+The repository assets include evidence of authentication, upload, S3 objects, SQS/Lambda processing, CloudWatch completion logs, DynamoDB metadata, Terraform infrastructure, and the frontend results screens.
 
 ## Screenshots
 
-<table>
-<tr>
-<td width="50%">
-<img src="assets/screenshots/s3-buckets.png" alt="S3 raw and processed buckets"><br>
-<sub><b>Amazon S3</b> — raw & processed image buckets</sub>
-</td>
-<td width="50%">
-<img src="assets/screenshots/lambda-function.png" alt="Lambda function console"><br>
-<sub><b>AWS Lambda</b> — presign function</sub>
-</td>
-</tr>
-<tr>
-<td width="50%">
-<img src="assets/screenshots/dynamodb-table.png" alt="DynamoDB metadata table"><br>
-<sub><b>DynamoDB</b> — image metadata table</sub>
-</td>
-<td width="50%">
-<img src="assets/screenshots/api-gateway-resources.png" alt="API Gateway resources"><br>
-<sub><b>API Gateway</b> — /upload resource & methods</sub>
-</td>
-</tr>
-<tr>
-<td width="50%">
-<img src="assets/screenshots/iam-role.png" alt="IAM role with scoped policies"><br>
-<sub><b>IAM</b> — least-privilege execution role</sub>
-</td>
-<td width="50%">
-<img src="assets/screenshots/sns-topic.png" alt="SNS topic for processing events"><br>
-<sub><b>SNS</b> — image-processed event topic</sub>
-</td>
-</tr>
-</table>
+### Authentication and Application
 
-## AWS Setup & Deployment
+![Login and authentication](assets/login-authentication.png)
 
-This project was provisioned directly through the AWS Console (no IaC yet — see [Roadmap](#roadmap)).
+![Dashboard](assets/dashboard.png)
 
-**1. S3 — two buckets**
-- `raw-image-bucket-*` — original uploads
-- `processed-image-bucket-*` — processed output
-- CORS enabled for the frontend origin; event notifications wired to SNS/SQS
+![Upload settings and progress](assets/upload-image.png)
 
-**2. IAM — least-privilege roles**
-- One role per Lambda, scoped to only the services it touches (S3, DynamoDB, SNS/SQS)
+![Gallery AI result](assets/gallery-ai-result.png)
 
-**3. Lambda — Presign function**
+![Image details and AI analysis](assets/details-ai-analysis.png)
 
-```python
-import json, boto3, os, time, uuid
+### AWS Infrastructure and Processing
 
-s3 = boto3.client('s3')
-BUCKET = os.environ.get("RAW_BUCKET", "raw-image-bucket")
+![Terraform infrastructure](assets/terraform.png)
 
-dynamodb = boto3.resource('dynamodb')
-table = dynamodb.Table(os.environ.get("DDB_TABLE", "ImagesMetadata"))
+![Amazon Cognito](assets/cognito.png)
 
-def lambda_handler(event, context):
-    filename = f"upload-{int(time.time())}.jpg"
-    imgid = str(uuid.uuid4())
-    timestamp = str(int(time.time()))
+![Source S3 upload](assets/s3_source_final.png)
 
-    url = s3.generate_presigned_url(
-        'put_object',
-        Params={'Bucket': BUCKET, 'Key': filename, 'ContentType': 'image/jpeg'},
-        ExpiresIn=300
-    )
+![Processed image in S3](assets/s3_processed_image.png)
 
-    userid = event.get('userid', 'anonymous')
+![SQS and Lambda trigger](assets/sqs-lambda-trigger.png)
 
-    table.put_item(Item={
-        'imgid': imgid,
-        'timestamp': timestamp,
-        'filename': filename,
-        'userid': userid,
-        'url': f"https://{BUCKET}.s3.amazonaws.com/{filename}"
-    })
+![Processor success](assets/processor-success.png)
 
-    return {
-        'statusCode': 200,
-        'headers': {"Access-Control-Allow-Origin": "*"},
-        'body': json.dumps({"uploadURL": url, "filename": filename, "imgid": imgid})
-    }
-```
+![CloudWatch processing success](assets/cloudwatch-processing-success.png)
 
-**4. Lambda — Processor function** (triggered by the S3 event via SNS/SQS)
+![DynamoDB metadata](assets/dynamodb-final-metadata1.png)
 
-```python
-import boto3, os
-from datetime import datetime
-
-s3 = boto3.client('s3')
-dynamodb = boto3.resource('dynamodb')
-table = dynamodb.Table(os.environ['DDB_TABLE'])
-PROCESSED_BUCKET = os.environ['PROCESSED_BUCKET']
-
-def lambda_handler(event, context):
-    for record in event['Records']:
-        source_bucket = record['s3']['bucket']['name']
-        object_key = record['s3']['object']['key']
-
-        s3.copy_object(
-            Bucket=PROCESSED_BUCKET,
-            Key=object_key,
-            CopySource={'Bucket': source_bucket, 'Key': object_key}
-        )
-
-        table.put_item(Item={
-            'imageId': object_key,
-            'timestamp': datetime.utcnow().isoformat()
-        })
-
-    return {"status": "done"}
-```
-
-**5. DynamoDB — `ImagesMetadata` table**
-
-| Attribute | Type | Role |
-|---|---|---|
-| `imgid` | String | Partition key |
-| `timestamp` | String | Sort key |
-| `filename` | String | Uploaded file name |
-| `userid` | String | GSI: `userindex` |
-| `url` | String | GSI: `urlindex` |
-
-**6. API Gateway**
-- REST API with a `POST /upload` resource, CORS enabled, integrated with the Presign Lambda
-
-**7. Frontend**
-- Static HTML/CSS/JS served locally (or from S3 + CloudFront); calls the API Gateway endpoint with `fetch()` and uploads to S3 with `XMLHttpRequest` for progress tracking
+Additional related screenshots are available in [`assets/`](assets/), including alternate S3, SQS, DynamoDB, and test views.
 
 ## Project Structure
 
-```
-├── index.html              # Upload UI markup
-├── style.css               # UI styling
-├── script.js                # Drag-and-drop, presigned upload, progress, gallery
+```text
+eventdrivenimageapp/
+├── backend/
+│   ├── lambdas/
+│   │   ├── images_api/
+│   │   │   ├── app.py
+│   │   │   └── requirements.txt
+│   │   ├── presign/
+│   │   │   ├── app.py
+│   │   │   └── requirements.txt
+│   │   └── processor/
+│   │       ├── analyzer.py
+│   │       ├── app.py
+│   │       ├── optimizer.py
+│   │       └── requirements.txt
+│   └── terraform/
+│       ├── main.tf
+│       ├── outputs.tf
+│       ├── providers.tf
+│       ├── variables.tf
+│       └── versions.tf
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   ├── config/
+│   │   ├── context/
+│   │   ├── pages/
+│   │   └── services/
+│   ├── package.json
+│   └── vite.config.js
 ├── assets/
-│   └── screenshots/         # README images
 └── README.md
 ```
 
-> Lambda functions, IAM roles, and other AWS resources for this project are configured directly in the AWS Console rather than checked into this repo; their source is documented above for reference.
+## Security and Reliability
 
-## Current Limitations
+- Amazon Cognito provides user authentication and email verification.
+- API Gateway routes use a Cognito JWT authorizer.
+- Lambda functions use an IAM execution role for S3, SQS, DynamoDB, Rekognition, Bedrock, and CloudWatch operations required by the current implementation.
+- Presigned S3 URLs allow direct browser uploads without exposing AWS credentials.
+- The frontend contains no AWS access keys or secret keys.
+- S3, SQS, Lambda, and DynamoDB operations are logged or represented through Lambda execution logs and processing status.
+- SQS retries failed deliveries and routes messages to the configured DLQ after the receive limit.
+- The current Images API reads the table and does not implement a separate per-user ownership filter in DynamoDB; authentication protects the API routes, but backend user-level data isolation should not be inferred from the current implementation.
 
-- The processing Lambda does not yet transform images (no resize, filter, or watermark) — the processed copy is currently identical to the raw upload
-- No authentication — uploads are anonymous
-- Infrastructure is provisioned manually via the AWS Console rather than as code
+## Future Improvements
 
-## Roadmap
+These are future work, not current features:
 
-- [ ] Real image transformations (resize, compress, format conversion) via Pillow
-- [ ] Infrastructure as Code (AWS SAM / Terraform)
-- [ ] Gallery page backed by DynamoDB queries (list/browse processed images)
-- [ ] User authentication via AWS Cognito
-- [ ] CloudFront CDN in front of the processed bucket
-- [ ] Image deletion support
+- Stronger per-user authorization and ownership filtering in the metadata layer
+- CloudFront distribution for optimized image delivery
+- CloudWatch alarms and application-level operational dashboards
+- Remote Terraform state and collaborative state management
+- GitHub Actions CI/CD with AWS OIDC
 
-## Skills Demonstrated
+## Project
 
-- Designing event-driven, decoupled architectures (S3 → SNS/SQS → Lambda)
-- Serverless compute with AWS Lambda (Python) and API Gateway REST APIs
-- Secure, direct-to-S3 uploads using presigned URLs
-- NoSQL data modeling with DynamoDB partition/sort keys and GSIs
-- Least-privilege IAM role design
-- Vanilla JS front-end work: drag-and-drop, `fetch`/`XMLHttpRequest`, upload progress UI
+**B.Tech Computer Science — Cloud Computing & Virtualization**
 
-## Author
-
-**Shagun Kimothi**
-Cloud Computing Project — AWS Serverless Architecture
-
-[![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?logo=github&logoColor=white)](https://github.com/shagunkimothi/eventdriven-imageapp)
+GitHub: [shagunkimothi/eventdriven-imageapp](https://github.com/shagunkimothi/eventdriven-imageapp)

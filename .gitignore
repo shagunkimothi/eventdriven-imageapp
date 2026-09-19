@@ -1,0 +1,19 @@
+# Terraform
+.terraform/
+terraform.tfstate
+terraform.tfstate.*
+*.tfplan
+*.zip
+
+# Frontend dependencies and build output
+node_modules/
+dist/
+
+# Local environment and editor files
+*.local
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+*.log
